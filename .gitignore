@@ -1,0 +1,4 @@
+config.json
+out/
+check_out/
+__pycache__/

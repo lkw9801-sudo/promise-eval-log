@@ -1,0 +1,51 @@
+# 서울시 실시간 도착정보 자동 기록 (노트북 없이 GitHub 서버에서 실행)
+# 시간대(한국 시간): 평일 08:00~09:40 · 매일 12:30~14:40 · 평일 18:00~19:40 · 매일 23:00~00:50
+# GitHub 예약 실행은 5~15분 늦게 시작할 수 있어서 10분 일찍 시작하고 넉넉히 돌린다.
+name: 실시간 기록
+on:
+  schedule:
+    - cron: "50 22 * * 0-4"   # 평일 07:50 KST, 110분
+    - cron: "20 3 * * *"      # 매일 12:20 KST, 140분
+    - cron: "50 8 * * 1-5"    # 평일 17:50 KST, 110분
+    - cron: "50 13 * * *"     # 매일 22:50 KST, 120분
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "몇 분 기록할까요 (시험은 5)"
+        default: "5"
+permissions:
+  contents: write
+concurrency:
+  group: logger
+  cancel-in-progress: false
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 기록 시간 정하기
+        id: dur
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then M="${{ github.event.inputs.minutes }}";
+          else case "${{ github.event.schedule }}" in
+            "20 3 * * *") M=140;; "50 13 * * *") M=120;; *) M=110;; esac; fi
+          echo "minutes=$M" >> "$GITHUB_OUTPUT"
+      - name: 기록
+        env:
+          SEOUL_SUBWAY_KEY: ${{ secrets.SEOUL_SUBWAY_KEY }}
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          TZ: Asia/Seoul
+        run: python logger.py --config config.example.json --now ${{ steps.dur.outputs.minutes }}
+      - name: 로그 저장(커밋)
+        if: always()
+        run: |
+          git config user.name "logger-bot"
+          git config user.email "logger-bot@users.noreply.github.com"
+          git add logs/*.jsonl || true
+          git diff --cached --quiet && exit 0
+          git commit -m "기록 $(TZ=Asia/Seoul date '+%m-%d %H:%M')"
+          for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
