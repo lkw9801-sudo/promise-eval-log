@@ -8,7 +8,7 @@
 import argparse, json, sys, time, traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from common import load_config, fetch_subway, fetch_bus_arrivals, fetch_bus_positions, HERE
+from common import load_config, fetch_subway, fetch_subway_all, fetch_bus_arrivals, fetch_bus_positions, HERE
 
 
 def in_window(now, w):
@@ -53,11 +53,47 @@ def poll(cfg, kind, fn, log_dir, **meta):
     try:
         res = fn()
         rec = {"ts": t0.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "ok": bool(res["rows"]),
-               "code": res["code"], "rows": res["rows"], **meta}
+               "code": res["code"], "rows": res["rows"], "api_call": 1, **meta}
+        if not res["rows"]:
+            rec["msg"] = res.get("msg")
     except Exception as e:
-        rec = {"ts": t0.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "ok": False, "error": repr(e), "rows": [], **meta}
+        rec = {"ts": t0.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, "ok": False, "error": repr(e), "rows": [], "api_call": 1, **meta}
     write(log_dir, rec)
     return rec
+
+
+def subway_calls_today(log_dir):
+    """오늘 이미 쓴 지하철 키 호출 수 (하루 한도 관리용)."""
+    p = Path(log_dir) / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
+    n = 0
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                if '"subway_arrival"' in line and ('"api_call": 1' in line or '"api_call"' not in line):
+                    n += 1
+    return n
+
+
+def poll_subway_all(cfg, log_dir):
+    """일괄 1회 호출 → 역별 기록으로 나눠 저장 (분석 코드는 그대로)."""
+    t0 = datetime.now()
+    ts = t0.strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        res = fetch_subway_all(cfg)
+    except Exception as e:
+        res = {"code": None, "msg": repr(e), "rows": []}
+    if not res["rows"]:
+        write(log_dir, {"ts": ts, "kind": "subway_arrival", "ok": False, "code": res["code"], "msg": res.get("msg"),
+                        "rows": [], "api_call": 1, "station": "ALL"})
+        return False
+    by = {}
+    for r in res["rows"]:
+        by.setdefault(r.get("statnNm"), []).append(r)
+    for i, st in enumerate(cfg["subway_stations"]):
+        rows = by.get(st, [])
+        write(log_dir, {"ts": ts, "kind": "subway_arrival", "ok": bool(rows), "code": res["code"], "rows": rows,
+                        "api_call": 1 if i == 0 else 0, "station": st, "via": "ALL"})
+    return True
 
 
 def main():
@@ -76,6 +112,10 @@ def main():
     stop_at = datetime.now() + timedelta(minutes=a.now) if a.now else None
     last_sub = last_bus = 0.0
     fails = 0
+    mode, all_fail = L.get("subway_mode", "all"), 0
+    limit = L.get("subway_daily_limit", 950)
+    used = subway_calls_today(log_dir)
+    print("오늘 지하철 호출 %d/%d회 사용" % (used, limit))
     print("기록 시작. Ctrl+C로 중지. 로그 폴더:", log_dir)
     while True:
         now = datetime.now()
@@ -86,11 +126,24 @@ def main():
             time.sleep(20)
             continue
         mono = time.monotonic()
-        if mono - last_sub >= L["subway_interval_sec"]:
+        if mono - last_sub >= L["subway_interval_sec"] and used < limit:
             last_sub = mono
-            for st in cfg["subway_stations"]:
-                r = poll(cfg, "subway_arrival", lambda: fetch_subway(cfg, st), log_dir, station=st)
-                fails = 0 if r["ok"] else fails + 1
+            ok = False
+            if mode == "all":
+                ok = poll_subway_all(cfg, log_dir)
+                used += 1
+                all_fail = 0 if ok else all_fail + 1
+                if all_fail >= 3:       # 일괄 방식이 안 되면 역별 방식으로 (호출 간격은 넓혀서)
+                    mode, L["subway_interval_sec"] = "each", max(60, L["subway_interval_sec"])
+                    print(now.strftime("%H:%M:%S"), "일괄 호출이 안 돼서 역별 호출로 바꿉니다.")
+            else:
+                for st in cfg["subway_stations"]:
+                    r = poll(cfg, "subway_arrival", lambda: fetch_subway(cfg, st), log_dir, station=st)
+                    used += 1
+                    ok = ok or r["ok"]
+            fails = 0 if ok else fails + 1
+            if used >= limit:
+                print(now.strftime("%H:%M:%S"), "오늘 지하철 호출 한도(%d회)에 가까워 지하철 기록을 멈춥니다." % limit)
         if mono - last_bus >= L["bus_interval_sec"]:
             last_bus = mono
             poll(cfg, "bus_arrival", lambda: fetch_bus_arrivals(cfg), log_dir)

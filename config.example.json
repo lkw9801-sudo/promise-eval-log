@@ -29,7 +29,10 @@
         "end": "00:40"
       }
     ],
-    "log_dir": "logs"
+    "log_dir": "logs",
+    "subway_mode": "all",
+    "subway_daily_limit": 950,
+    "_한도": "서울시 실시간 지하철 키는 하루 1,000회. 일괄(ALL) 1회 호출로 5개 역을 받고, 950회에서 멈춘다."
   },
   "subway_stations": [
     "홍대입구",

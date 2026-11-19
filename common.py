@@ -34,10 +34,27 @@ def fetch_subway(cfg, station):
     key = cfg["keys"]["seoul_subway"]
     url = ("http://swopenapi.seoul.go.kr/api/subway/%s/json/realtimeStationArrival/0/40/%s"
            % (key, urllib.parse.quote(station)))
-    data = http_json(url)
+    return _subway_unwrap(http_json(url))
+
+
+def fetch_subway_all(cfg):
+    """서울시 실시간 지하철 도착정보 일괄: 한 번 호출로 전 역. 우리 역만 골라 돌려준다."""
+    key = cfg["keys"]["seoul_subway"]
+    url = "http://swopenapi.seoul.go.kr/api/subway/%s/json/realtimeStationArrival/ALL" % key
+    res = _subway_unwrap(http_json(url, timeout=20))
+    want = set(cfg["subway_stations"])
+    res["rows"] = [r for r in res["rows"] if r.get("statnNm") in want]
+    return res
+
+
+def _subway_unwrap(data):
     err = data.get("errorMessage") or {}
     rows = data.get("realtimeArrivalList") or []
-    return {"code": err.get("code"), "msg": err.get("message"), "rows": rows}
+    code = err.get("code") or data.get("code") or data.get("status")
+    msg = err.get("message") or data.get("message")
+    if not rows and not msg:
+        msg = json.dumps(data, ensure_ascii=False)[:200]
+    return {"code": code, "msg": msg, "rows": rows}
 
 
 def fetch_bus_arrivals(cfg):
