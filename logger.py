@@ -36,7 +36,7 @@ def estimate(cfg):
     for w in L["windows"]:
         days = 5 if w["days"] == "평일" else 2 if w["days"] == "주말" else 7
         m = window_minutes(w) * days / 7
-        sub += m * 60 / L["subway_interval_sec"] * len(cfg["subway_stations"])
+        sub += m * 60 / L["subway_interval_sec"] * (1 if L.get("subway_mode", "all") == "all" else len(cfg["subway_stations"]))
         bus += m * 60 / L["bus_interval_sec"] * 2
     print("하루 평균 예상 호출 수 · 지하철(서울열린데이터광장 키): %d회 · 버스(공공데이터포털 키, 도착+위치): %d회" % (sub, bus))
     print("→ 각 사이트 마이페이지의 '일일 트래픽'보다 작아야 합니다. 넘으면 interval을 늘리거나 시간대를 줄이세요.")
@@ -101,6 +101,8 @@ def main():
     ap.add_argument("--config")
     ap.add_argument("--now", type=int, help="지금부터 N분만 기록")
     ap.add_argument("--estimate", action="store_true")
+    ap.add_argument("--scheduled", type=int, metavar="MAX_MIN",
+                    help="예약 실행용: 기록 시간대 안일 때만 기록하고, 시간대가 끝나거나 MAX_MIN분이 지나면 종료")
     a = ap.parse_args()
     cfg = load_config(a.config)
     if a.estimate:
@@ -110,6 +112,11 @@ def main():
     log_dir = HERE / L["log_dir"]
     log_dir.mkdir(exist_ok=True)
     stop_at = datetime.now() + timedelta(minutes=a.now) if a.now else None
+    if a.scheduled:
+        if not any(in_window(datetime.now(), w) for w in L["windows"]):
+            print("지금은 기록 시간대가 아니라 종료합니다.")
+            return
+        hard_stop = datetime.now() + timedelta(minutes=a.scheduled)
     last_sub = last_bus = 0.0
     fails = 0
     mode, all_fail = L.get("subway_mode", "all"), 0
@@ -122,6 +129,9 @@ def main():
         if stop_at and now >= stop_at:
             break
         active = bool(stop_at) or any(in_window(now, w) for w in L["windows"])
+        if a.scheduled and (not active or now >= hard_stop):
+            print(now.strftime("%H:%M:%S"), "예약 기록 종료")
+            break
         if not active:
             time.sleep(20)
             continue

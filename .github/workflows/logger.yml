@@ -1,51 +1,61 @@
 # 서울시 실시간 도착정보 자동 기록 (노트북 없이 GitHub 서버에서 실행)
-# 시간대(한국 시간): 평일 08:00~09:40 · 매일 12:30~14:40 · 평일 18:00~19:40 · 매일 23:00~00:50
-# GitHub 예약 실행은 5~15분 늦게 시작할 수 있어서 10분 일찍 시작하고 넉넉히 돌린다.
+# 기록 시간대(한국 시간): 매일 06:40~22:50 연속 · 지하철 60초, 버스 75초 간격
+# GitHub 예약 실행은 몇 시간씩 늦게 시작하기도 해서, 매시간 실행을 걸어 두고 한 번에 하나씩만 돌린다.
+#  - 돌고 있는 실행이 있으면 다음 실행은 대기했다가 앞 실행이 끝나자마자 이어서 시작 → 빈 구간 최소화
+#  - 각 실행은 시간대가 끝나거나 5시간 40분이 지나면 저장(커밋)하고 종료
+#  - LAST_DAY 이후에는 아무것도 하지 않음
 name: 실시간 기록
 on:
   schedule:
-    - cron: "50 22 * * 0-4"   # 평일 07:50 KST, 110분
-    - cron: "20 3 * * *"      # 매일 12:20 KST, 140분
-    - cron: "50 8 * * 1-5"    # 평일 17:50 KST, 110분
-    - cron: "50 13 * * *"     # 매일 22:50 KST, 120분
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       minutes:
-        description: "몇 분 기록할까요 (시험은 5)"
-        default: "5"
+        description: "몇 분 기록할까요 (비우면 예약 방식으로 시간대 끝까지)"
+        default: ""
 permissions:
   contents: write
 concurrency:
   group: logger
   cancel-in-progress: false
+env:
+  LAST_DAY: "2026-11-22"
 jobs:
   log:
     runs-on: ubuntu-latest
-    timeout-minutes: 170
+    timeout-minutes: 355
     steps:
+      - name: 기간 확인
+        id: gate
+        run: |
+          TODAY=$(TZ=Asia/Seoul date +%F)
+          if [[ "$TODAY" > "$LAST_DAY" ]]; then echo "run=no" >> "$GITHUB_OUTPUT"; echo "기록 기간 끝($LAST_DAY)"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'yes'
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.run == 'yes'
         with:
           python-version: "3.12"
-      - name: 기록 시간 정하기
-        id: dur
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then M="${{ github.event.inputs.minutes }}";
-          else case "${{ github.event.schedule }}" in
-            "20 3 * * *") M=140;; "50 13 * * *") M=120;; *) M=110;; esac; fi
-          echo "minutes=$M" >> "$GITHUB_OUTPUT"
       - name: 기록
+        if: steps.gate.outputs.run == 'yes'
         env:
           SEOUL_SUBWAY_KEY: ${{ secrets.SEOUL_SUBWAY_KEY }}
           DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
           TZ: Asia/Seoul
-        run: python logger.py --config config.example.json --now ${{ steps.dur.outputs.minutes }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          git pull --rebase -q || true
+          if [ -n "${{ github.event.inputs.minutes }}" ]; then
+            python logger.py --config config.example.json --now ${{ github.event.inputs.minutes }}
+          else
+            python logger.py --config config.example.json --scheduled 340
+          fi
       - name: 로그 저장(커밋)
-        if: always()
+        if: always() && steps.gate.outputs.run == 'yes'
         run: |
           git config user.name "logger-bot"
           git config user.email "logger-bot@users.noreply.github.com"
           git add logs/*.jsonl || true
           git diff --cached --quiet && exit 0
           git commit -m "기록 $(TZ=Asia/Seoul date '+%m-%d %H:%M')"
-          for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
+          for i in 1 2 3 4 5; do git pull --rebase && git push && break; sleep 7; done
