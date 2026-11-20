@@ -113,9 +113,12 @@ def main():
     log_dir.mkdir(exist_ok=True)
     stop_at = datetime.now() + timedelta(minutes=a.now) if a.now else None
     if a.scheduled:
-        if not any(in_window(datetime.now(), w) for w in L["windows"]):
+        soon = datetime.now() + timedelta(minutes=50)   # 시간대 시작 50분 안이면 기다렸다가 시작
+        if not any(in_window(datetime.now(), w) or in_window(soon, w) for w in L["windows"]):
             print("지금은 기록 시간대가 아니라 종료합니다.")
             return
+        while not any(in_window(datetime.now(), w) for w in L["windows"]):
+            time.sleep(30)
         hard_stop = datetime.now() + timedelta(minutes=a.scheduled)
     last_sub = last_bus = 0.0
     fails = 0

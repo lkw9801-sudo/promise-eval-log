@@ -244,7 +244,8 @@ class Engine:
                     for r in rows:
                         if str(r.get("btrainNo")) == vid[1] and dir_match(r, leg["line"], leg["alight_dir"]):
                             e = subway_eta_seconds(r)
-                            if e is not None and ts + timedelta(seconds=e) > t_board:
+                            # 하차역 기준 안내는 열차가 멀면(3분 넘게) 낙관적으로 짧게 나온다 → 가까울 때만 쓰고, 아니면 학습한 주행시간
+                            if e is not None and e <= 180 and ts + timedelta(seconds=e) > t_board:
                                 return ts + timedelta(seconds=e)
             else:
                 snap = self.d.bus_snap(t_now)

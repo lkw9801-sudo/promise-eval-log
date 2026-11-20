@@ -3,11 +3,15 @@
 # GitHub 예약 실행은 몇 시간씩 늦게 시작하기도 해서, 매시간 실행을 걸어 두고 한 번에 하나씩만 돌린다.
 #  - 돌고 있는 실행이 있으면 다음 실행은 대기했다가 앞 실행이 끝나자마자 이어서 시작 → 빈 구간 최소화
 #  - 각 실행은 시간대가 끝나거나 5시간 40분이 지나면 저장(커밋)하고 종료
+#  - 실행이 끝났는데 아직 시간대 안이면 다음 실행을 바로 이어서 건다(GitHub가 예약 실행을 자주 건너뛰어서)
 #  - LAST_DAY 이후에는 아무것도 하지 않음
 name: 실시간 기록
 on:
   schedule:
     - cron: "17 * * * *"
+    - cron: "52 20 * * *"     # 05:52 KST — 아침 시작을 놓치지 않게 여러 번
+    - cron: "7 21 * * *"
+    - cron: "27 21 * * *"
   workflow_dispatch:
     inputs:
       minutes:
@@ -15,6 +19,7 @@ on:
         default: ""
 permissions:
   contents: write
+  actions: write
 concurrency:
   group: logger
   cancel-in-progress: false
@@ -28,6 +33,7 @@ jobs:
       - name: 기간 확인
         id: gate
         run: |
+          echo "start=$(date +%s)" >> "$GITHUB_OUTPUT"
           TODAY=$(TZ=Asia/Seoul date +%F)
           if [[ "$TODAY" > "$LAST_DAY" ]]; then echo "run=no" >> "$GITHUB_OUTPUT"; echo "기록 기간 끝($LAST_DAY)"; else echo "run=yes" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
@@ -59,3 +65,14 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "기록 $(TZ=Asia/Seoul date '+%m-%d %H:%M')"
           for i in 1 2 3 4 5; do git pull --rebase && git push && break; sleep 7; done
+      - name: 다음 실행 이어 걸기
+        if: always() && steps.gate.outputs.run == 'yes' && github.event.inputs.minutes == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HM=$(TZ=Asia/Seoul date +%H%M)
+          RAN=$(( $(date +%s) - ${{ steps.gate.outputs.start }} ))
+          if [ "$RAN" -lt 1800 ]; then echo "이번 실행이 30분도 안 돼서 이어 걸지 않음"; exit 0; fi
+          if [ "$HM" -ge 0630 ] && [ "$HM" -lt 2235 ]; then
+            gh workflow run logger.yml -R "${{ github.repository }}" --ref main && echo "다음 실행 요청"
+          fi
