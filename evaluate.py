@@ -168,6 +168,42 @@ class Engine:
     def __init__(self, cfg, data):
         self.cfg, self.d = cfg, data
         self.ride_hist = self._learn_rides()
+        self._wait_cache = {}
+        E = cfg.get("evaluation", {})
+        self.q_show = E.get("wait_quantile_show", 0.5)      # 화면 예상 도착: 환승 대기 중앙값
+        self.q_plan = E.get("wait_quantile_plan", 0.9)      # 권장 출발: 환승 대기 상위 10%까지 대비
+
+    def arrivals(self, leg):
+        """승차 지점의 실제 도착 시각 목록(모든 날)."""
+        if leg["mode"] == "subway":
+            sid = SUBWAY_ID[leg["line"]]
+            lst = []
+            for (st, s2, lab), v in self.d.truth_list.items():
+                if st == leg["board"] and s2 == sid and leg["board_dir"] in lab:
+                    lst.extend(x[0] for x in v)
+            return sorted(lst)
+        return [x[0] for x in self.d.btruth_list.get(self.d.board_st, [])]
+
+    def wait_q(self, leg, t, q):
+        """다른 날 같은 시간대(±1시간)에 승차 지점에 '아무 때나' 도착했을 때 기다린 시간의 분위수(분)."""
+        day, hr = svc(t), t.hour
+        key = (id(leg), day, hr)
+        if key not in self._wait_cache:
+            arr = self.arrivals(leg)
+            xs = []
+            for a, b in zip(arr, arr[1:]):
+                if svc(a) == day or (b - a).total_seconds() > 40 * 60:
+                    continue
+                if min(abs(a.hour - hr), 24 - abs(a.hour - hr)) > 1:
+                    continue
+                g = (b - a).total_seconds() / 60
+                xs.extend(g - k / 2 for k in range(int(g * 2)))   # 30초마다 도착했다고 보고 남은 대기
+            xs.sort()
+            self._wait_cache[key] = xs
+        xs = self._wait_cache[key]
+        if len(xs) < 20:
+            return self.cfg["headway_min"][leg["line"]] * q
+        return xs[min(len(xs) - 1, int(q * len(xs)))]
 
     def leg_key(self, leg):
         if leg["mode"] == "bus":
@@ -256,11 +292,12 @@ class Engine:
                         for n in (1, 2):
                             if str(row.get("vehId%d" % n)) == vid[1]:
                                 e = bus_eta_seconds(row, n)
-                                if e is not None and ts + timedelta(seconds=e) > t_board:
+                                if e is not None and e <= 300 and ts + timedelta(seconds=e) > t_board:
                                     return ts + timedelta(seconds=e)
         return t_board + timedelta(minutes=self.ride_min(leg, svc(t_now)))
 
-    def predict_arrival(self, route, D, t_now, cache):
+    def predict_arrival(self, route, D, t_now, cache, q=None):
+        q = self.q_show if q is None else q
         t = D + timedelta(minutes=route["origin_walk_min"])
         for leg in route["legs"]:
             key = id(leg)
@@ -273,6 +310,8 @@ class Engine:
             if i >= len(cands):
                 return None
             tb, vid = cands[i]
+            if vid is None:     # 아직 화면에 안 보이는 차: 배차 간격 가정 대신 실제 기록의 대기 분포
+                tb = t + timedelta(minutes=self.wait_q(leg, t, q))
             t = self.alight_pred(leg, vid, tb, t_now) + timedelta(minutes=leg["walk_after_min"])
         return ceil_min(t + timedelta(minutes=route["final_walk_min"]))
 
@@ -284,7 +323,7 @@ class Engine:
         for _ in range(180):
             if D < floor_min(t_now) - 30 * MIN:
                 return None
-            f = self.predict_arrival(route, D, t_now, cache)
+            f = self.predict_arrival(route, D, t_now, cache, q=self.q_plan)
             if f is not None and f <= target:
                 return D
             D -= MIN
