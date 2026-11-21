@@ -169,9 +169,18 @@ def dir_match(row, line, label):
     return str(row.get("subwayId")) == SUBWAY_ID[line] and label in (row.get("trainLineNm") or "")
 
 
+def iter_files(log_dir):
+    """옛 형식(logs/날짜.jsonl)과 새 형식(logs/날짜/시_실행.jsonl[.gz]) 모두."""
+    L = Path(log_dir)
+    ps = [p for pat in ("*.jsonl", "*.jsonl.gz", "*/*.jsonl", "*/*.jsonl.gz") for p in L.glob(pat)]
+    return sorted(ps, key=lambda p: str(p).replace(".gz", ""))
+
+
 def iter_logs(log_dir):
-    for p in sorted(Path(log_dir).glob("*.jsonl")):
-        with open(p, encoding="utf-8") as f:
+    import gzip
+    for p in iter_files(log_dir):
+        op = gzip.open if str(p).endswith(".gz") else open
+        with op(p, "rt", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line:

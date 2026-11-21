@@ -3,7 +3,7 @@
 사용:  python logger.py            (config.json의 시간대에만 기록)
        python logger.py --now 20   (지금부터 20분만 바로 기록 · 시험용)
        python logger.py --estimate (하루 호출 수만 계산)
-결과:  logs/YYYY-MM-DD.jsonl  (한 줄 = 한 번 호출한 원본 응답)
+결과:  logs/YYYY-MM-DD/HH_실행시작.jsonl(.gz)  (한 줄 = 한 번 호출한 원본 응답)
 """
 import argparse, json, sys, time, traceback
 from datetime import datetime, timedelta
@@ -42,8 +42,15 @@ def estimate(cfg):
     print("→ 각 사이트 마이페이지의 '일일 트래픽'보다 작아야 합니다. 넘으면 interval을 늘리거나 시간대를 줄이세요.")
 
 
+RUN_ID = datetime.now().strftime("%H%M%S")
+
+
 def write(log_dir, rec):
-    p = Path(log_dir) / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
+    """logs/날짜/시_실행시작.jsonl 로 나눠 쓴다(GitHub 파일 100MB 제한 → 커밋 때 gzip)."""
+    now = datetime.now()
+    d = Path(log_dir) / now.strftime("%Y-%m-%d")
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / ("%s_%s.jsonl" % (now.strftime("%H"), RUN_ID))
     with open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
@@ -64,10 +71,15 @@ def poll(cfg, kind, fn, log_dir, **meta):
 
 def subway_calls_today(log_dir):
     """오늘 이미 쓴 지하철 키 호출 수 (하루 한도 관리용)."""
-    p = Path(log_dir) / (datetime.now().strftime("%Y-%m-%d") + ".jsonl")
+    from common import iter_files
+    import gzip
+    day = datetime.now().strftime("%Y-%m-%d")
     n = 0
-    if p.exists():
-        with open(p, encoding="utf-8") as f:
+    for p in iter_files(log_dir):
+        if day not in str(p):
+            continue
+        op = gzip.open if str(p).endswith(".gz") else open
+        with op(p, "rt", encoding="utf-8") as f:
             for line in f:
                 if '"subway_arrival"' in line and ('"api_call": 1' in line or '"api_call"' not in line):
                     n += 1
