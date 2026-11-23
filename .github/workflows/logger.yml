@@ -24,7 +24,7 @@ concurrency:
   group: logger
   cancel-in-progress: false
 env:
-  LAST_DAY: "2026-11-22"
+  LAST_DAY: "2026-11-29"
 jobs:
   log:
     runs-on: ubuntu-latest
